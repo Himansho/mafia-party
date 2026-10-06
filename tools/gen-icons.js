@@ -184,3 +184,19 @@ for (const [size, name, maskable] of sizes) {
   fs.writeFileSync(path.join(outDir, name), png);
   console.log('wrote icons/' + name + ' (' + png.length + ' bytes)');
 }
+
+/* ---------- Android mipmap launcher icons ---------- */
+const densities = [
+  ['mdpi', 48],
+  ['hdpi', 72],
+  ['xhdpi', 96],
+  ['xxhdpi', 144],
+  ['xxxhdpi', 192]
+];
+for (const d of densities) {
+  const dir = path.join(__dirname, '..', 'android', 'res', 'mipmap-' + d[0]);
+  fs.mkdirSync(dir, { recursive: true });
+  const png = makeIcon(d[1], false);
+  fs.writeFileSync(path.join(dir, 'ic_launcher.png'), png);
+  console.log('wrote android/res/mipmap-' + d[0] + '/ic_launcher.png (' + png.length + ' bytes)');
+}

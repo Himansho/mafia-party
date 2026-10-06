@@ -1,6 +1,6 @@
-/* Mafia Party — online room client.
- * Transport: SSE (server→client push) + POST /api/room/:code/act (client→server).
- * Zero dependencies. Auto-reconnect built into EventSource.
+/* Mafia Party — online client v2 (Supabase Edge Function backend).
+ * Everyone plays from their own home over the internet — no PC server needed.
+ * Transport: POST to the edge function + polling (2s).
  */
 (function (global) {
   'use strict';
@@ -8,23 +8,25 @@
   const Sfx = global.Sfx;
   const Fx = global.Fx;
   const Words = global.Words;
-  const Game = global.Game;
+
+  // Injected at deploy time by tools/build-web.js (or edit here for local dev):
+  const CFG = global.__MAFIA_CONFIG__ || { fnUrl: '' };
 
   const S = {
     playerId: null,
     roomCode: null,
     playerName: null,
-    es: null,
-    lastView: null,
+    view: null,
+    pollTimer: null,
     revealedThisPhase: false
   };
   const LS_KEY = 'mafia-online-session';
 
-  /* ================= api helpers ================= */
+  /* ================= transport ================= */
 
-  async function post(action, data) {
-    const body = Object.assign({ playerId: S.playerId, action: action }, data || {});
-    const res = await fetch('/api/room/' + S.roomCode + '/act', {
+  async function call(body) {
+    if (!CFG.fnUrl) throw new Error('Online mode not configured yet');
+    const res = await fetch(CFG.fnUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -35,17 +37,22 @@
     return json;
   }
 
+  const act = (action, extra) => call(Object.assign({ op: 'act', code: S.roomCode, playerId: S.playerId, action: action }, extra || {}));
+  const getState = () => call({ op: 'state', code: S.roomCode, playerId: S.playerId });
+
+  /* ================= helpers ================= */
+
   function topicLabel(t) {
     const pack = Words.PACKS[t];
     return pack ? pack.emoji + ' ' + pack.name : t;
   }
 
   function nameById(view, id) {
-    const p = view.players.find(function (p2) { return p2.id === id; });
+    const p = (view.players || []).find(function (p2) { return p2.id === id; });
     return p ? p.name : '…';
   }
 
-  /* ================= entry points ================= */
+  /* ================= home / join ================= */
 
   function openHome() {
     try {
@@ -63,13 +70,8 @@
     const name = myName();
     if (!name) { toast('Enter your name first'); Sfx.error(); return; }
     try {
-      const res = await fetch('/api/rooms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name })
-      }).then(function (r) { return r.json(); });
-      if (res.error) throw new Error(res.error);
-      enterRoom(res.roomCode, res.playerId, name);
+      const r = await call({ op: 'create', name: name });
+      enterRoom(r.roomCode, r.playerId, name);
     } catch (e) {
       toast('Could not create room: ' + e.message, 'err');
       Sfx.error();
@@ -82,13 +84,8 @@
     if (!name) { toast('Enter your name first'); Sfx.error(); return; }
     if (code.length !== 4) { toast('Room code is 4 letters'); Sfx.error(); return; }
     try {
-      const res = await fetch('/api/rooms/' + code + '/join', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name })
-      }).then(function (r) { return r.json(); });
-      if (res.error) throw new Error(res.error);
-      enterRoom(res.roomCode, res.playerId, name);
+      const r = await call({ op: 'join', code: code, name: name });
+      enterRoom(r.roomCode, r.playerId, name);
     } catch (e) {
       toast('Could not join: ' + e.message, 'err');
       Sfx.error();
@@ -99,405 +96,297 @@
     S.roomCode = code;
     S.playerId = playerId;
     S.playerName = name;
+    S.revealedThisPhase = false;
     localStorage.setItem(LS_KEY, JSON.stringify({ name: name, code: code, playerId: playerId }));
-    connectSSE();
+    refresh(true);
+    startPolling();
     show('lobby');
   }
 
-  /* ================= SSE connection ================= */
+  /* ================= state sync ================= */
 
-  function connectSSE() {
-    if (S.es) { S.es.close(); S.es = null; }
-    const es = new EventSource('/api/room/' + S.roomCode + '/events?playerId=' + encodeURIComponent(S.playerId));
-    S.es = es;
-    es.addEventListener('state', function (ev) {
-      let payload;
-      try { payload = JSON.parse(ev.data); } catch (e) { return; }
-      handleState(payload);
-    });
-    es.addEventListener('kicked', function () {
-      toast('You were removed from the room');
-      leaveRoom(false);
-    });
-    es.onopen = function () { discoBanner(false); };
-    es.onerror = function () { if (S.es) discoBanner(true); };
-  }
-
-  let discoEl = null;
-  function discoBanner(on) {
-    if (on && !discoEl) {
-      discoEl = el('div', 'disco-band', '⚠ Connection lost — reconnecting…');
-      document.body.appendChild(discoEl);
-    } else if (!on && discoEl) {
-      discoEl.remove(); discoEl = null;
+  let pollBusy = false;
+  async function refresh(force) {
+    if (pollBusy) return;
+    pollBusy = true;
+    try {
+      const v = await getState();
+      handleState(v);
+    } catch (e) {
+      if (force) toast('Connection problem: ' + e.message, 'err');
+    } finally {
+      pollBusy = false;
     }
   }
 
-  function leaveRoom(callServer) {
-    if (callServer) post('leave', {}).catch(function () {});
-    if (S.es) { S.es.close(); S.es = null; }
-    S.roomCode = null; S.playerId = null;
-    discoBanner(false);
-    show('home');
+  function startPolling() {
+    stopPolling();
+    S.pollTimer = setInterval(function () { refresh(false); }, 2000);
+  }
+  function stopPolling() {
+    if (S.pollTimer) { clearInterval(S.pollTimer); S.pollTimer = null; }
   }
 
-  /* ================= state dispatch ================= */
-
-  function handleState(view) {
-    if (!view || !view.room) return;
-    S.lastView = view;
-    const phase = view.room.phase;
-    if (phase === 'lobby') renderLobby(view);
-    else if (phase === 'dealing') renderDeal(view);
-    else if (phase === 'clues') renderClues(view);
-    else if (phase === 'discussion') renderDiscussion(view);
-    else if (phase === 'vote') renderVote(view);
-    else if (phase === 'reveal') renderReveal(view);
-    else if (phase === 'win') renderWin(view);
+  async function actAndRefresh(action, extra) {
+    try {
+      await act(action, extra);
+      await refresh(true);
+    } catch (e) {
+      toast(e.message, 'err');
+      Sfx.error();
+      await refresh(false);
+    }
   }
 
-  /* ================= lobby ================= */
+  /* ================= phase renderers ================= */
 
-  function renderLobby(view) {
-    const room = view.room;
+  let lastPhase = null;
+  let prevClueCount = -1;
+  function handleState(v) {
+    if (!v) return;
+    const phase = v.room ? v.room.phase : v.phase;
+    S.view = v;
+    if (phase !== lastPhase) { Sfx.select(); lastPhase = phase; S.revealedThisPhase = false; }
+    switch (phase) {
+      case 'lobby': return renderLobby(v);
+      case 'dealing': return renderDeal(v);
+      case 'clues': return renderClues(v);
+      case 'discussion': return renderDiscussion(v);
+      case 'vote': return renderVote(v);
+      case 'reveal': return renderReveal(v);
+      case 'win': return renderWin(v);
+    }
+  }
+
+  /* ---------- lobby ---------- */
+
+  function renderLobby(v) {
     show('lobby');
-    $('#room-code').textContent = room.code;
+    $('#room-code').textContent = S.roomCode;
+    const players = v.room.players || [];
+    $('#lobby-count').textContent = players.length;
     const list = $('#lobby-list');
     list.innerHTML = '';
-    room.players.forEach(function (p) {
-      const av = avatarFor(p.name);
-      const row = el('div', 'lobby-row' + (p.id === S.playerId ? ' me' : '') + (p.connected ? '' : ' disconnected'));
-      row.innerHTML =
-        '<div class="avatar" style="background:' + av.color + '2e;color:' + av.color + '">' + escapeHtml(av.initial) + '</div>' +
-        '<span class="l-name">' + escapeHtml(p.name) + (p.id === S.playerId ? ' (you)' : '') + '</span>' +
-        (p.isHost ? '<span class="host-badge">HOST</span>' : '');
+    for (const p of players) {
+      const row = el('div', 'lobby-row' + (p.id === S.playerId ? ' me' : ''));
+      const av = el('div', 'avatar');
+      av.style.background = avatarFor(p.name);
+      av.textContent = (p.name[0] || '?').toUpperCase();
+      const nm = el('div', 'l-name', escapeHtml(p.name));
+      row.appendChild(av); row.appendChild(nm);
+      if (p.id === v.room.hostId) row.appendChild(el('span', 'host-badge', 'HOST'));
       list.appendChild(row);
-    });
-    $('#lobby-count').textContent = room.players.length;
-    const isHost = room.hostId === S.playerId;
-    const topicRow = $('#lobby-topic-row');
-    if (isHost) {
-      topicRow.innerHTML = '<div class="field-label" style="text-align:center;width:100%">Topic</div>';
-      const wrap = el('div', 'topic-choose-row');
-      const topics = [{ id: 'mix', label: '🎲 Mix' }].concat(Words.TOPIC_IDS.map(function (t) {
-        return { id: t, label: Words.PACKS[t].emoji + ' ' + Words.PACKS[t].name };
-      }));
-      topics.forEach(function (t) {
-        const chip = el('div', 't-chip' + (room.topicId === t.id ? ' on' : ''), escapeHtml(t.label));
-        chip.addEventListener('click', function () {
-          post('setTopic', { topicId: t.id }).catch(function (e) { toast(e.message, 'err'); });
-        });
-        wrap.appendChild(chip);
-      });
-      topicRow.appendChild(wrap);
-    } else {
-      topicRow.innerHTML = '';
     }
-    const canStart = isHost && room.players.length >= Game.MIN_PLAYERS;
+    const isHost = v.room.hostId === S.playerId;
     $('#btn-online-start').classList.toggle('hidden', !isHost);
-    $('#btn-online-start').disabled = !canStart;
     $('#lobby-hint').textContent = isHost
-      ? (room.players.length < 3 ? 'Need at least 3 players to start.' : 'Ready when you are!')
+      ? 'Pick a topic and start when everyone is in.'
       : 'Waiting for the host to start…';
+    const tr = $('#lobby-topic-row');
+    tr.innerHTML = '';
+    if (isHost) {
+      tr.appendChild(el('div', 'field-label', 'Topic'));
+      const chips = el('div', 'topic-grid');
+      for (const id of ['mix', 'movies', 'space', 'sports', 'actors', 'anime']) {
+        const c = el('button', 'chip' + (v.room.topicId === id ? ' sel' : ''), topicLabel(id));
+        c.onclick = function () { actAndRefresh('setTopic', { topicId: id }); };
+        chips.appendChild(c);
+      }
+      tr.appendChild(chips);
+    }
   }
 
-  $('#btn-share-room').addEventListener('click', function () {
-    const url = location.origin + '/?room=' + S.roomCode;
-    if (navigator.share) {
-      navigator.share({ title: 'Mafia Party', text: 'Join my Mafia Party room!', url: url }).catch(function () {});
-    } else if (navigator.clipboard) {
-      navigator.clipboard.writeText(url).then(function () { toast('Link copied 📋', 'ok'); });
-    } else {
-      toast(url);
-    }
-  });
+  /* ---------- dealing ---------- */
 
-  $('#btn-online-start').addEventListener('click', async function () {
-    try { await post('start', {}); } catch (e) { toast(e.message, 'err'); Sfx.error(); }
-  });
-
-  $('#btn-leave-room').addEventListener('click', function () { leaveRoom(true); });
-
-  /* ================= in-game: deal ================= */
-
-  function renderDeal(view) {
+  function renderDeal(v) {
     show('deal');
-    const room = view.room;
-    // track "revealed" per phase
-    if (view.roundStamp !== S.lastRoundStamp) {
-      S.lastRoundStamp = view.roundStamp;
-      S.revealedThisPhase = false;
-    }
-    const card = view.card || {};
-    const revealed = !!card.revealed || S.revealedThisPhase;
+    // online mode: no cover, no pass-the-phone — each player reveals on their device
     $('#deal-cover').classList.add('hidden');
     $('#deal-card').classList.remove('hidden');
-    const flip = $('#flip-card');
-    const front = $('#flip-front');
-    if (card.role === 'mafia') {
-      const suspectsHtml = (card.suspects || []).map(function (w) {
-        return '<span class="suspect">' + escapeHtml(w) + '</span>';
-      }).join('');
-      front.classList.add('mafia-card');
-      front.innerHTML =
-        '<div class="card-role red">🔴 You are the MAFIA</div>' +
-        '<div class="card-topic">Topic: ' + escapeHtml(topicLabel(card.topic)) + '</div>' +
-        '<div class="suspects-label">The word is ONE of these:</div>' +
-        '<div class="suspects">' + suspectsHtml + '</div>';
-    } else if (card.word) {
-      front.classList.remove('mafia-card');
-      front.innerHTML =
-        '<div class="card-role gold">YOUR WORD</div>' +
-        '<div class="card-word">' + escapeHtml(card.word) + '</div>' +
-        '<div class="card-topic">Topic: ' + escapeHtml(topicLabel(card.topic)) + '</div>';
-    }
-    if (revealed) {
-      flip.classList.add('flipped');
-      $('#deal-actions').innerHTML = '<p class="hint-sub">Waiting for everyone to reveal… (' +
-        (room.revealedCount || 0) + '/' + room.players.length + ')</p>';
+    $('#btn-deal-next').classList.add('hidden');
+    $('#btn-deal-finish').classList.add('hidden');
+    $('#flip-card').classList.add('flipped');
+    if (S.revealedThisPhase || (v.card && v.card.revealed)) {
+      renderMyCard(v);
     } else {
-      flip.classList.remove('flipped');
-      $('#deal-actions').innerHTML =
-        '<button class="btn btn-primary btn-big" id="btn-online-reveal">Tap to reveal 🔒</button>';
+      const front = $('#flip-front');
+      front.innerHTML = '<button class="btn btn-primary btn-big" id="btn-online-reveal">Tap to reveal 🔒</button>' +
+        '<p class="hint-sub">Everyone reveals on their own device.</p>';
       $('#btn-online-reveal').addEventListener('click', function () {
         S.revealedThisPhase = true;
-        post('revealed', {}).catch(function (e) { toast(e.message, 'err'); });
-        flip.classList.add('flipped');
-        Sfx.reveal(); haptic(30);
+        actAndRefresh('revealed');
       });
     }
   }
 
-  /* ================= in-game: clues ================= */
+  function renderMyCard(v) {
+    const front = $('#flip-front');
+    const card = v.card || {};
+    let html = '';
+    if (card.role === 'mafia') {
+      Sfx.mafiaReveal();
+      html = '<div class="card-title">You are <span class="red">🔴 MAFIA</span></div>' +
+        '<div class="card-sub">Topic: ' + escapeHtml(topicLabel(v.concreteTopic)) + '</div>' +
+        '<div class="card-title sm">Your suspects — the word is one of these:</div>' +
+        '<div class="suspects">' + (card.suspects || []).map(function (w) { return '<span class="suspect-chip">' + escapeHtml(w) + '</span>'; }).join('') + '</div>' +
+        '<div class="card-sub">Blend in. Guess from context. Don\'t get caught.</div>';
+    } else {
+      Sfx.reveal();
+      html = '<div class="card-title">You are <span class="gold">⭕ CIVILIAN</span></div>' +
+        '<div class="card-sub">Topic: ' + escapeHtml(topicLabel(v.concreteTopic)) + '</div>' +
+        '<div class="card-title sm">The secret word:</div>' +
+        '<div class="word-big">' + escapeHtml(card.word || '?') + '</div>' +
+        '<div class="card-sub">Give clues. Find the mafia.</div>';
+    }
+    front.innerHTML = html;
+    $('#deal-actions').innerHTML = '<p class="hint-sub">Waiting for everyone to see their cards…</p>';
+  }
 
-  function renderClues(view) {
+  /* ---------- clues ---------- */
+
+  function renderClues(v) {
     show('clue');
-    $('#clue-topic').textContent = topicLabel(view.concreteTopic);
-    $('#clue-round').textContent = 'Round ' + (view.roundNo || 1);
-    const currentId = view.speakingOrder[view.speakerIdx];
-    const isMyTurn = currentId === S.playerId;
-    $('#speaker-name').textContent = nameById(view, currentId);
-    document.querySelector('.speaker-instruction').innerHTML = isMyTurn
-      ? 'Say <b>one word</b> as your clue — out loud!'
-      : 'Listen… <b>' + escapeHtml(nameById(view, currentId)) + '</b> is giving a clue.';
-    $('#clue-ring').style.display = 'none';
+    const isMyTurn = v.speakingOrder && v.speakingOrder[v.speakerIdx] === S.playerId;
+    const spkName = v.speakingOrder ? nameById(v, v.speakingOrder[v.speakerIdx]) : '';
+    $('#clue-topic').textContent = topicLabel(v.concreteTopic);
+    $('#speaker-name').textContent = isMyTurn ? 'YOU' : spkName;
+    $('#speaker-card').classList.toggle('my-turn', isMyTurn);
+    $('#clue-round').textContent = 'Round ' + v.roundNo;
+    // hide offline-only elements
+    $('#clue-timer-ring').classList.add('hidden');
     $('#clue-timer-num').classList.add('hidden');
     $('#btn-clue-done').classList.toggle('hidden', !isMyTurn);
-    if (isMyTurn) $('#btn-clue-done').textContent = 'I said my clue — next →';
-    renderClueChips(view);
-  }
-
-  function renderClueChips(view) {
-    const wrap = $('#clue-progress');
-    wrap.innerHTML = '';
-    const clues = view.clues || [];
-    (view.speakingOrder || []).forEach(function (pid) {
-      const clueObj = clues.filter(function (c) { return c.playerId === pid; })[0];
-      const isCurrent = pid === view.speakingOrder[view.speakerIdx];
-      const chip = el('span', 'clue-chip' + (isCurrent ? ' current' : ''));
-      chip.innerHTML = '<span class="who">' + escapeHtml(nameById(view, pid)) + '</span>' +
-        (clueObj ? ' → ' + escapeHtml(clueObj.word) : '');
-      wrap.appendChild(chip);
+    if (isMyTurn) {
+      $('#btn-clue-done').textContent = '✅ I said my clue';
+      $('#btn-clue-done').onclick = function () { actAndRefresh('clue', { clue: '·' }); };
+    }
+    const prog = $('#clue-progress');
+    prog.innerHTML = '';
+    (v.clues || []).forEach(function (c) {
+      prog.appendChild(el('div', 'clue-row', '<b>' + escapeHtml(c.name) + ':</b> ' + escapeHtml(c.text)));
     });
   }
 
-  $('#btn-clue-done').addEventListener('click', function () {
-    if (!S.roomCode) return; // offline mode has its own handler
-    if (!S.lastView || S.lastView.room.phase !== 'clues') return;
-    post('clue', {}).catch(function (e) { toast(e.message, 'err'); });
-  });
+  /* ---------- discussion ---------- */
 
-  /* ================= in-game: discussion ================= */
-
-  function renderDiscussion(view) {
+  function renderDiscussion(v) {
     show('discussion');
-    $('#disc-timer-wrap').classList.add('off');
-    const recap = $('#clue-recap');
-    recap.innerHTML = '';
-    (view.clues || []).forEach(function (c) {
-      const chip = el('span', 'clue-chip');
-      chip.innerHTML = '<span class="who">' + escapeHtml(nameById(view, c.playerId)) + ':</span> ' + escapeHtml(c.word);
-      recap.appendChild(chip);
-    });
-    $('#btn-begin-vote').textContent = '🗳️ Everyone vote';
+    $('#clue-recap').innerHTML = (v.clues || []).map(function (c) {
+      return '<div class="clue-row"><b>' + escapeHtml(c.name) + ':</b> ' + escapeHtml(c.text) + '</div>';
+    }).join('');
+    $('#disc-timer-wrap').classList.add('hidden');
+    $('#btn-begin-vote').textContent = '🗳️ Start the vote';
+    $('#btn-begin-vote').onclick = function () { actAndRefresh('beginVote'); };
   }
 
-  $('#btn-begin-vote').addEventListener('click', async function () {
-    if (!S.roomCode) return;
-    if (!S.lastView || S.lastView.room.phase !== 'discussion') return;
-    try { await post('beginVote', {}); } catch (e) { toast(e.message, 'err'); }
-  });
+  /* ---------- vote ---------- */
 
-  /* ================= in-game: vote ================= */
-
-  let pendingTarget = null;
-
-  function renderVote(view) {
+  function renderVote(v) {
     show('vote');
     $('#vote-cover').classList.add('hidden');
     $('#vote-ballot').classList.remove('hidden');
-    const vp = view.voteProgress || { cast: 0, total: '?' };
-    $('#vote-prompt').innerHTML = 'Who is the Mafia? <span class="mini">(' +
-      vp.cast + '/' + vp.total + ' locked)</span>';
-    const myVote = view.myVote || null;
+    $('#vote-prompt').textContent = 'Who is the Mafia? ' +
+      ((v.voteProgress ? v.voteProgress.cast : 0) + '/' + (v.voteProgress ? v.voteProgress.total : '?') + ' votes in');
     const grid = $('#vote-grid');
     grid.innerHTML = '';
-    const alive = view.players.filter(function (p) { return p.alive && p.id !== S.playerId; });
-    grid.classList.toggle('one-col', alive.length > 6);
-    alive.forEach(function (p) {
-      const av = avatarFor(p.name);
-      const cardEl = el('div', 'vote-card' + (myVote === p.id ? ' sel' : ''));
-      cardEl.innerHTML =
-        '<div class="v-avatar" style="background:' + av.color + '2e;color:' + av.color + '">' + escapeHtml(av.initial) + '</div>' +
-        '<div class="v-name">' + escapeHtml(p.name) + '</div>';
-      cardEl.addEventListener('click', function () {
-        if (myVote) return;
-        pendingTarget = p.id;
-        $('#vote-confirm-name').textContent = p.name;
-        $('#vote-confirm').classList.remove('hidden');
-        Sfx.select(); haptic();
-      });
-      grid.appendChild(cardEl);
-    });
-    if (myVote) {
-      $('#vote-confirm').classList.remove('hidden');
-      $('#vote-confirm p').innerHTML = '🔒 Your vote for <b>' + escapeHtml(nameById(view, myVote)) + '</b> is locked. Waiting for others…';
-      $('#btn-vote-confirm').classList.add('hidden');
-      $('#btn-vote-change').classList.add('hidden');
-    } else {
-      $('#vote-confirm').classList.add('hidden');
-      $('#btn-vote-confirm').classList.remove('hidden');
-      $('#btn-vote-change').classList.remove('hidden');
+    const alive = (v.players || []).filter(function (p) { return p.alive; });
+    for (const p of alive) {
+      if (p.id === S.playerId) continue;
+      const cell = el('button', 'vote-cell' + (v.myVote === p.id ? ' sel' : ''));
+      cell.innerHTML = '<span class="vc-name">' + escapeHtml(p.name) + '</span>' +
+        '<span class="vc-state">' + (v.myVote === p.id ? '✓ locked' : 'vote') + '</span>';
+      cell.onclick = function () { actAndRefresh('vote', { targetId: p.id }); };
+      grid.appendChild(cell);
     }
   }
 
-  $('#btn-vote-confirm').addEventListener('click', async function () {
-    if (!S.roomCode || !pendingTarget) return;
-    try {
-      await post('vote', { targetId: pendingTarget });
-      Sfx.vote(); haptic(18);
-    } catch (e) { toast(e.message, 'err'); }
-  });
+  /* ---------- reveal ---------- */
 
-  $('#btn-vote-change').addEventListener('click', function () {
-    if (!S.roomCode) return;
-    pendingTarget = null;
-    $('#vote-confirm').classList.add('hidden');
-    Sfx.tap();
-  });
-
-  /* ================= in-game: reveal ================= */
-
-  function renderReveal(view) {
+  function renderReveal(v) {
     show('reveal');
-    const tally = view.tally || {};
-    const need = view.voteNeed || 0;
-    const maxVotes = Math.max(1, ...(Object.values(tally).length ? Object.values(tally) : [1]));
-    const wrap = $('#tally');
-    wrap.innerHTML = '';
-    view.players.forEach(function (p) {
-      if (!p.alive && p.id !== view.eliminatedId) return;
-      const c = tally[p.id] || 0;
-      const row = el('div', 'tally-row');
-      row.innerHTML =
-        '<span class="t-name">' + escapeHtml(p.name) + (p.alive ? '' : ' <span class="mini">(out)</span>') + '</span>' +
-        '<span class="t-bar" style="width:' + Math.max(6, (c / maxVotes) * 140) + 'px"></span>' +
-        '<span class="t-count">' + c + '</span>';
-      wrap.appendChild(row);
-    });
+    const tally = $('#tally');
+    tally.innerHTML = Object.entries(v.tally || {}).map(function (pair) {
+      return '<div class="tally-row"><span>' + escapeHtml(nameById(v, pair[0])) + '</span><b>' + pair[1] + '</b></div>';
+    }).join('') || '<div class="tally-row"><span>—</span><b></b></div>';
+
     const rr = $('#reveal-result');
-    rr.classList.remove('hidden');
     $('#final-guess').classList.add('hidden');
     $('#btn-continue').classList.add('hidden');
-    if (view.eliminatedId) {
-      const p = view.players.find(function (p2) { return p2.id === view.eliminatedId; });
-      const role = view.eliminatedRole;
-      rr.innerHTML = '<div class="rr-elim">' + escapeHtml(p ? p.name : '?') + ' is eliminated!</div>' +
-        '<div class="rr-role ' + role + '">' + (role === 'mafia' ? '🔴 MAFIA!' : '⭕ Civilian') + '</div>' +
-        '<div class="rr-sub">Majority needed: ' + need + '</div>';
+
+    if (v.eliminatedId) {
+      const p = (v.players || []).find(function (p2) { return p2.id === v.eliminatedId; });
+      const role = v.eliminatedRole;
+      rr.innerHTML = '<div class="rr-elim">' + escapeHtml(p ? p.name : '?') + ' is out!</div>' +
+        '<div class="rr-role ' + role + '">' + (role === 'mafia' ? '🔴 MAFIA!' : '⭕ Civilian') + '</div>';
       if (role === 'mafia') Sfx.mafiaReveal(); else Sfx.error();
-      if (view.card && view.card.finalGuess) {
-        renderFinalGuessUI(view);
+      if (v.card && v.card.finalGuess) {
+        // we are the mafia — show guess UI
+        const fg = $('#final-guess');
+        fg.classList.remove('hidden');
+        const opts = $('#fg-options');
+        opts.innerHTML = '';
+        (v.card.finalGuess.options || []).forEach(function (opt) {
+          const b = el('button', 'btn btn-secondary fg-opt', escapeHtml(opt));
+          b.onclick = function () { actAndRefresh('finalGuess', { guess: opt }); };
+          opts.appendChild(b);
+        });
+      } else if (role === 'mafia') {
+        rr.innerHTML += '<div class="rr-sub">The mafia gets one final guess — hold tight…</div>';
       } else {
         $('#btn-continue').classList.remove('hidden');
         $('#btn-continue').textContent = 'Continue →';
-        $('#btn-continue').onclick = async function () {
-          try { await post('continue', {}); } catch (e) { toast(e.message, 'err'); }
-        };
+        $('#btn-continue').onclick = function () { actAndRefresh('continue'); };
       }
     } else {
       rr.innerHTML = '<div class="rr-elim">No strict majority — nobody eliminated!</div>' +
-        '<div class="rr-sub">' + need + '+ votes on one player needed. Continuing…</div>';
-      Sfx.error();
+        '<div class="rr-sub">' + (v.voteNeed || 0) + '+ votes on one player needed.</div>';
       $('#btn-continue').classList.remove('hidden');
       $('#btn-continue').textContent = 'Next round of clues →';
-      $('#btn-continue').onclick = async function () {
-        try { await post('continue', {}); } catch (e) { toast(e.message, 'err'); }
-      };
+      $('#btn-continue').onclick = function () { actAndRefresh('continue'); };
     }
   }
 
-  function renderFinalGuessUI(view) {
-    $('#reveal-result').classList.add('hidden');
-    $('#tally').classList.add('hidden');
-    const fg = $('#final-guess');
-    fg.classList.remove('hidden');
-    const wrap = $('#fg-options');
-    wrap.innerHTML = '';
-    const options = Game.shuffle(view.card.finalGuess.options);
-    options.forEach(function (w) {
-      const b = el('button', '', escapeHtml(w));
-      b.addEventListener('click', async function () {
-        wrap.querySelectorAll('button').forEach(function (x) { x.disabled = true; });
-        try {
-          const res = await post('finalGuess', { guess: w });
-          const correct = !!(res && res.correct);
-          b.classList.add(correct ? 'correct-flash' : 'wrong-flash');
-          if (correct) { Sfx.win(); Fx.celebrate(); } else { Sfx.mafiaReveal(); Fx.sinister(); }
-        } catch (e) { toast(e.message, 'err'); }
-      });
-      wrap.appendChild(b);
-    });
-    Sfx.reveal();
-  }
+  /* ---------- win ---------- */
 
-  /* ================= in-game: win ================= */
-
-  function renderWin(view) {
+  function renderWin(v) {
     show('win');
-    const civWin = view.winner === 'civilians';
-    const banner = $('#win-banner');
-    banner.className = 'win-banner ' + (civWin ? 'civ' : 'maf');
+    const civWin = v.winner === 'civilians';
     const reasons = {
-      'mafia-caught': 'The mafia was caught red-handed.',
-      'word-guessed': 'The mafia guessed the word — steal successful!',
-      'last-two': 'The mafia outlasted everyone. Sinister.',
-      'word-blurted': 'A civilian blurted the word — civilians win.'
+      'mafia-caught': 'The mafia was voted out and the final guess failed.',
+      'word-guessed': 'The caught mafia guessed the word and stole the win!',
+      'last-two': 'Only two players remain — the mafia slips away.',
+      'word-blurted': 'Someone said the word out loud — mafia wins instantly!'
     };
-    banner.innerHTML =
-      '<div class="win-title">' + (civWin ? '🏆 CIVILIANS WIN' : '🎩 MAFIA WINS') + '</div>' +
-      '<div class="win-sub">' + escapeHtml(reasons[view.winReason] || '') + '</div>';
+    $('#win-banner').innerHTML = '<div class="win-title ' + (civWin ? 'civ' : 'mafia') + '">' +
+      (civWin ? '⚖️ Civilians win!' : '🔴 Mafia wins!') + '</div>' +
+      '<div class="win-sub">' + (reasons[v.winReason] || '') + '</div>';
     $('#win-details').innerHTML =
-      'The word was <b>' + escapeHtml(view.secretWord || '') + '</b><br>' +
-      'Mafia: <b>' + (view.mafiaNames || []).map(escapeHtml).join(', ') + '</b>';
-    // rematch: host sees the button, everyone sees a hint
+      'The word was <b>' + escapeHtml(v.secretWord || '') + '</b><br>' +
+      'Mafia: <b>' + (v.mafiaNames || []).map(escapeHtml).join(', ') + '</b>';
+    $('#scoreboard').innerHTML = '';
+    const isHost = v.room && v.room.hostId === S.playerId;
+    $('#btn-rematch').classList.toggle('hidden', !isHost);
     $('#btn-rematch').textContent = '🔁 Rematch';
-    $('#btn-rematch').onclick = async function () {
-      try { await post('rematch', {}); } catch (e) { toast(e.message, 'err'); }
-    };
+    $('#btn-rematch').onclick = function () { actAndRefresh('rematch'); };
     if (civWin) { Sfx.win(); Fx.celebrate(); } else { Sfx.mafiaReveal(); Fx.sinister(); }
   }
 
-  /* ================= boot: deep link (?room=CODE) ================= */
+  /* ================= leave ================= */
 
-  function bootDeepLink() {
+  $('#btn-leave-room').addEventListener('click', function () {
+    stopPolling();
+    S.roomCode = null;
+    S.playerId = null;
+    lastPhase = null;
+    show('online-home');
+  });
+
+  /* ================= boot ================= */
+
+  (function () {
     const m = location.search.match(/room=([A-Za-z0-9]{4})/);
-    if (!m) return;
-    const code = m[1].toUpperCase();
-    openHome();
-    $('#join-code').value = code;
-  }
-  bootDeepLink();
+    if (m) $('#join-code').value = m[1].toUpperCase();
+  })();
 
-  global.Online = { openHome: openHome, state: S, post: post };
+  global.Online = { openHome: openHome, state: S, refresh: refresh };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -115,6 +115,15 @@ const server = http.createServer(function (req, res) {
   const url = new URL(req.url, 'http://x');
   const pathname = decodeURIComponent(url.pathname);
 
+  // CORS: lets the Android app (file:// WebView origin) call this server from a LAN address
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    return res.end();
+  }
+
   /* ---- API routes ---- */
   if (pathname === '/api/rooms' && req.method === 'POST') return handleCreateRoom(req, res);
   if (pathname.startsWith('/api/rooms/') && pathname.endsWith('/join') && req.method === 'POST') {

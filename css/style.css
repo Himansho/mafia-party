@@ -245,6 +245,10 @@ input[type="range"]::-webkit-slider-thumb { appearance: none; width: 26px; heigh
 
 /* ---------- online ---------- */
 .online-cta { width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
+.server-details { margin-top: 6px; font-size: .82rem; color: var(--muted); }
+.server-details summary { cursor: pointer; user-select: none; padding: 6px 0; }
+.server-details .text-input { margin-top: 8px; }
+.server-details .hint-sub { text-align: left; margin-top: 6px; font-size: .72rem; }
 .or-divider { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: .8rem; margin: 8px 0; }
 .or-divider::before, .or-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .room-code-wrap { text-align: center; margin-bottom: 6px; }
