@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0b0e17">
+<meta name="description" content="Mafia Party — a free social deduction party game. One word, one mafia, no mercy. 3–20 players, pass-the-phone or online rooms.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Mafia Party</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/style.css">
+  <script>window.__MAFIA_CONFIG__ = { fnUrl: "https://traixahcfznoeqnbhzyu.supabase.co/functions/v1/mafia-room" };</script>
+</head>
+<body>
+<canvas id="fx-canvas" aria-hidden="true"></canvas>
+<div id="toast-layer" aria-live="polite"></div>
+
+<div id="app">
+
+  <!-- ============ HOME ============ -->
+  <section class="screen active" id="screen-home">
+    <div class="home-wrap">
+      <div class="logo">
+        <svg viewBox="0 0 120 120" class="logo-svg" aria-hidden="true">
+          <defs>
+            <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#f5d67b"/><stop offset="1" stop-color="#c9992e"/>
+            </linearGradient>
+          </defs>
+          <!-- cards fan -->
+          <rect x="18" y="34" width="34" height="50" rx="6" fill="#1c2233" stroke="#3a4763" stroke-width="2" transform="rotate(-14 35 59)"/>
+          <rect x="68" y="34" width="34" height="50" rx="6" fill="#1c2233" stroke="#3a4763" stroke-width="2" transform="rotate(14 85 59)"/>
+          <rect x="43" y="28" width="34" height="54" rx="6" fill="#131828" stroke="url(#gold)" stroke-width="2.5"/>
+          <!-- fedora -->
+          <ellipse cx="60" cy="47" rx="17" ry="4.5" fill="url(#gold)"/>
+          <path d="M47 46 Q47 30 60 30 Q73 30 73 46 L66 46 Q66 37 60 37 Q54 37 54 46 Z" fill="url(#gold)"/>
+          <!-- M -->
+          <text x="60" y="72" text-anchor="middle" font-size="17" font-weight="900" fill="#e8c05a" font-family="Georgia, serif">M</text>
+        </svg>
+      </div>
+      <h1 class="title">MAFIA <span>PARTY</span></h1>
+      <p class="tagline">One word. One mafia. No mercy.</p>
+
+      <div class="menu">
+        <button class="btn btn-primary btn-big" id="btn-offline">📱 Pass &amp; Play</button>
+        <button class="btn btn-secondary btn-big" id="btn-online">🌐 Online Room</button>
+        <button class="btn btn-ghost" id="btn-howto">❓ How to Play</button>
+        <button class="btn btn-ghost" id="btn-settings">⚙️ Settings</button>
+      </div>
+      <button class="btn btn-install hidden" id="btn-install">📲 Install App</button>
+      <p class="foot-note">3–20 players · free · works offline (pass &amp; play)</p>
+    </div>
+  </section>
+
+  <!-- ============ SETUP (offline) ============ -->
+  <section class="screen" id="screen-setup">
+    <header class="bar"><button class="btn-icon" data-nav="home">←</button><h2>New Game</h2><span class="bar-spacer"></span></header>
+    <div class="scroll">
+
+      <div class="field-label">Players <span class="count-pill" id="setup-count">4</span></div>
+      <div class="stepper">
+        <button class="btn-icon stepper-btn" id="players-minus">−</button>
+        <input id="player-count" type="range" min="3" max="20" value="4" step="1">
+        <button class="btn-icon stepper-btn" id="players-plus">+</button>
+      </div>
+
+      <div class="field-label">Names</div>
+      <div id="name-list" class="name-list"></div>
+
+      <div class="field-label">Topic</div>
+      <div id="topic-grid" class="topic-grid"></div>
+
+      <details class="advanced" id="advanced">
+        <summary>⚙️ Advanced settings</summary>
+        <div class="adv-row"><span>Mafias</span>
+          <div class="seg" id="seg-mafia">
+            <button data-v="1" class="on">1</button><button data-v="2">2</button>
+          </div>
+        </div>
+        <div class="adv-row"><span>Clue timer</span>
+          <div class="seg" id="seg-clue-timer">
+            <button data-v="0">Off</button><button data-v="10" class="on">10s</button><button data-v="15">15s</button>
+          </div>
+        </div>
+        <div class="adv-row"><span>Discussion timer</span>
+          <div class="seg" id="seg-disc-timer">
+            <button data-v="0">Off</button><button data-v="60" class="on">60s</button><button data-v="90">90s</button>
+          </div>
+        </div>
+        <div class="adv-row"><span>Mafia's final guess</span>
+          <div class="seg" id="seg-final-guess">
+            <button data-v="1" class="on">On</button><button data-v="0">Off</button>
+          </div>
+        </div>
+      </details>
+
+      <button class="btn btn-primary btn-big" id="btn-start-offline">🎬 Start Game</button>
+    </div>
+  </section>
+
+  <!-- ============ DEAL (pass-the-phone) ============ -->
+  <section class="screen" id="screen-deal">
+    <div id="deal-cover" class="deal-cover">
+      <div class="deal-count" id="deal-count">1 of 4</div>
+      <div class="pass-msg">Pass the phone to</div>
+      <div class="pass-name" id="deal-name">Ben</div>
+      <button class="btn btn-primary btn-big btn-hold" id="btn-hold-reveal">
+        <span class="hold-fill"></span>
+        <span class="hold-label">Hold to reveal 🔒</span>
+      </button>
+      <p class="hint-sub">Keep it private — no peeking!</p>
+    </div>
+    <div id="deal-card" class="deal-card hidden">
+      <div class="flip-scene"><div class="flip-card" id="flip-card">
+        <div class="flip-face flip-back">?</div>
+        <div class="flip-face flip-front" id="flip-front"></div>
+      </div></div>
+      <div id="deal-actions">
+        <button class="btn btn-primary btn-big" id="btn-deal-next">Next player →</button>
+        <button class="btn btn-primary btn-big hidden" id="btn-deal-finish">Everyone's in — start clues 🗣️</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CLUES ============ -->
+  <section class="screen" id="screen-clue">
+    <header class="bar"><h2 id="clue-topic">Topic</h2><span class="bar-spacer"></span><span class="mini" id="clue-round"></span></header>
+    <div class="scroll center-col">
+      <div class="speaker-card" id="speaker-card">
+        <div class="speaker-label">Now speaking</div>
+        <div class="speaker-name" id="speaker-name">Ben</div>
+        <div class="speaker-instruction">Say <b>one word</b> related to the secret word</div>
+        <svg class="timer-ring" viewBox="0 0 100 100" id="clue-timer-ring">
+          <circle class="ring-bg" cx="50" cy="50" r="45"/>
+          <circle class="ring-fg" cx="50" cy="50" r="45" id="clue-ring"/>
+        </svg>
+        <div class="timer-num hidden" id="clue-timer-num">10</div>
+      </div>
+      <div id="clue-progress" class="clue-progress"></div>
+      <button class="btn btn-primary btn-big" id="btn-clue-done">Done — next speaker →</button>
+    </div>
+  </section>
+
+  <!-- ============ DISCUSSION ============ -->
+  <section class="screen" id="screen-discussion">
+    <header class="bar"><h2>💬 Discussion</h2><span class="bar-spacer"></span></header>
+    <div class="scroll center-col">
+      <p class="disc-prompt">Who doesn't belong? Interrogate!</p>
+      <div id="clue-recap" class="clue-recap"></div>
+      <div class="disc-timer" id="disc-timer-wrap">
+        <div class="disc-timer-bar" id="disc-timer-bar"></div>
+        <span id="disc-timer-num">60</span>
+      </div>
+      <button class="btn btn-danger btn-big" id="btn-begin-vote">🗳️ Vote now</button>
+    </div>
+  </section>
+
+  <!-- ============ VOTE ============ -->
+  <section class="screen" id="screen-vote">
+    <div id="vote-cover" class="deal-cover">
+      <div class="pass-msg">Secret ballot — pass the phone to</div>
+      <div class="pass-name" id="vote-pass-name">Ben</div>
+      <button class="btn btn-primary btn-big" id="btn-vote-ready">I'm <span id="vote-pass-who">Ben</span> — show my ballot</button>
+    </div>
+    <div id="vote-ballot" class="hidden">
+      <div class="scroll center-col">
+        <p class="vote-prompt" id="vote-prompt">Who is the Mafia?</p>
+        <div id="vote-grid" class="vote-grid"></div>
+        <div id="vote-confirm" class="vote-confirm hidden">
+          <p>Lock in your vote for <b id="vote-confirm-name">Cara</b>?</p>
+          <div class="row">
+            <button class="btn btn-primary" id="btn-vote-confirm">✔ Lock vote</button>
+            <button class="btn btn-ghost" id="btn-vote-change">Change</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ REVEAL / TALLY ============ -->
+  <section class="screen" id="screen-reveal">
+    <div class="scroll center-col">
+      <h2 class="reveal-title">🗳️ The Vote</h2>
+      <div id="tally" class="tally"></div>
+      <div id="reveal-result" class="reveal-result"></div>
+      <div id="final-guess" class="final-guess hidden">
+        <div class="fg-title">🔥 Mafia's last chance</div>
+        <p>Guess the secret word to steal the win!</p>
+        <div id="fg-options" class="fg-options"></div>
+      </div>
+      <button class="btn btn-primary btn-big hidden" id="btn-continue">Continue →</button>
+    </div>
+  </section>
+
+  <!-- ============ WIN ============ -->
+  <section class="screen" id="screen-win">
+    <div class="scroll center-col">
+      <div id="win-banner" class="win-banner"></div>
+      <div id="win-details" class="win-details"></div>
+      <div class="field-label">Scoreboard</div>
+      <div id="scoreboard" class="scoreboard"></div>
+      <div class="row wrap">
+        <button class="btn btn-primary" id="btn-rematch">🔁 Rematch</button>
+        <button class="btn btn-secondary" id="btn-new-game">🆕 New game</button>
+        <button class="btn btn-ghost" id="btn-win-home">🏠 Home</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ONLINE: HOME ============ -->
+  <section class="screen" id="screen-online-home">
+    <header class="bar"><button class="btn-icon" data-nav="home">←</button><h2>Online Room</h2><span class="bar-spacer"></span></header>
+    <div class="scroll center-col">
+      <div class="field-label">Your name</div>
+      <input id="online-name" class="text-input" maxlength="14" placeholder="e.g. Vito" autocomplete="off">
+      <div class="online-cta">
+        <button class="btn btn-primary btn-big" id="btn-create-room">🎪 Create room</button>
+        <div class="or-divider"><span>or</span></div>
+        <div class="field-label">Room code</div>
+        <input id="join-code" class="text-input code-input" maxlength="4" placeholder="ABCD" autocomplete="off" autocapitalize="characters">
+        <button class="btn btn-secondary btn-big" id="btn-join-room">🚪 Join room</button>
+      </div>
+      <p class="hint-sub">Share the code with friends — everyone plays from their own home, on any network. 🌍</p>
+    </div>
+  </section>
+
+  <!-- ============ ONLINE: LOBBY ============ -->
+  <section class="screen" id="screen-lobby">
+    <header class="bar"><button class="btn-icon" id="btn-leave-room">←</button><h2>Room</h2><span class="bar-spacer"></span></header>
+    <div class="scroll center-col">
+      <div class="room-code-wrap">
+        <div class="field-label">Room code</div>
+        <div class="room-code" id="room-code">----</div>
+        <button class="btn btn-ghost btn-sm" id="btn-share-room">📋 Copy / share link</button>
+      </div>
+      <div class="field-label">Players <span class="count-pill" id="lobby-count">1</span></div>
+      <div id="lobby-list" class="lobby-list"></div>
+      <div id="lobby-topic-row"></div>
+      <button class="btn btn-primary btn-big" id="btn-online-start">🚀 Start game</button>
+      <p class="hint-sub" id="lobby-hint">Waiting for the host to start…</p>
+    </div>
+  </section>
+
+  <!-- ============ SETTINGS ============ -->
+  <section class="screen" id="screen-settings">
+    <header class="bar"><button class="btn-icon" data-nav="home">←</button><h2>Settings</h2><span class="bar-spacer"></span></header>
+    <div class="scroll">
+      <div class="adv-row"><span>🔊 Sound</span><div class="seg" id="seg-sound"><button data-v="1" class="on">On</button><button data-v="0">Off</button></div></div>
+      <div class="adv-row"><span>📳 Haptics</span><div class="seg" id="seg-haptics"><button data-v="1" class="on">On</button><button data-v="0">Off</button></div></div>
+      <p class="hint-sub" style="margin-top:24px">Mafia Party is a PWA — install it from your browser menu ("Add to Home Screen") for fullscreen play.</p>
+      <button class="btn btn-ghost" id="btn-reset-data">🗑️ Reset all data</button>
+      <p class="version">v1.0</p>
+    </div>
+  </section>
+
+  <!-- ============ HOW TO PLAY ============ -->
+  <section class="screen" id="screen-howto">
+    <header class="bar"><button class="btn-icon" data-nav="home">←</button><h2>How to Play</h2><span class="bar-spacer"></span></header>
+    <div class="scroll center-col" id="howto-slides"></div>
+    <div class="howto-nav">
+      <button class="btn btn-ghost" id="btn-howto-prev">← Back</button>
+      <div class="dots" id="howto-dots"></div>
+      <button class="btn btn-primary" id="btn-howto-next">Next →</button>
+    </div>
+  </section>
+
+</div>
+
+<script src="js/words.js"></script>
+<script src="js/game.js"></script>
+<script src="js/sound.js"></script>
+<script src="js/fx.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/online.js"></script>
+<script src="js/app.js"></script>
+<script>
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function(){}); });
+  }
+</script>
+</body>
+</html>
