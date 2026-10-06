@@ -4,6 +4,9 @@
 
 A social deduction party game for **3–20 players** — pass-the-phone offline, or everyone on their own phone online. A PWA you can install and play anywhere.
 
+> ### 📥 [Download Mafia Party v1.0](https://github.com/Himansho/mafia-party/releases/download/v1.0/mafia-party-v1.0.zip)
+> Unzip → `node server/server.js` → open `http://localhost:3000` on every phone. No install, no build, no npm.
+
 - 🕵️ **One secret word**, one mafia who *doesn't know it*
 - 🎭 Mafia sees **4 suspects** (the word + 3 decoys) and must blend in
 - 🗣️ Everyone gives **one-word clues** → discussion → **vote**
@@ -82,3 +85,6 @@ Dark noir (`#0b0e17`) + gold (`#e8c05a`), Georgia serif titles, red accents for 
 ---
 
 **Mafia Party v1.0** — built as a zero-dependency PWA. MIT licensed.
+
+📜 **License:** MIT — free to use, modify, and distribute.  
+📥 **All releases:** [github.com/Himansho/mafia-party/releases](https://github.com/Himansho/mafia-party/releases)
