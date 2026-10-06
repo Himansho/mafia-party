@@ -41,9 +41,12 @@ Pop-Location
 & "$BT\d8.bat" --release --min-api 24 --lib "$PLAT" --output "$OUT" "$OUT\classes.jar"
 if ($LASTEXITCODE -ne 0) { throw 'd8 failed' }
 
-Write-Host '== 5. copy web assets =='
+Write-Host '== 5. copy web assets (from web/ bundle — cloud config injected) =='
+if (-not (Test-Path "$PROJ\web\index.html")) {
+  throw 'web/ bundle missing. Run: node tools/build-web.js <edge-function-url> first'
+}
 foreach ($item in @('index.html', 'manifest.webmanifest', 'css', 'js', 'icons')) {
-  Copy-Item "$PROJ\$item" "$OUT\assets\www\" -Recurse -Force
+  Copy-Item "$PROJ\web\$item" "$OUT\assets\www\" -Recurse -Force
 }
 
 Write-Host '== 6. pack apk + assets =='
