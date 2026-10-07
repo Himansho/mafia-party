@@ -1,6 +1,6 @@
 /* Mafia Party — service worker: precache the app shell for offline play */
 'use strict';
-const CACHE = 'mafia-party-v1';
+const CACHE = 'mafia-party-v2';
 const ASSETS = [
   './',
   './index.html',
